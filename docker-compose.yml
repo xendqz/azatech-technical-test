@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: azatech_mysql
+    restart: always
+    environment:
+      MYSQL_DATABASE: azatech_shop
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  backend:
+    image: php:8.3-cli
+    container_name: azatech_backend
+    restart: always
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mysql
+    command: bash -c "php artisan serve --host=0.0.0.0 --port=8000"
+
+  frontend:
+    image: node:20-alpine
+    container_name: azatech_frontend
+    restart: always
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "3000:3000"
+    command: sh -c "npm install && npm run dev"
+
+volumes:
+  mysql_data:

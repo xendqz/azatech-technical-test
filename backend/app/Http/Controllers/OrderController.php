@@ -13,12 +13,26 @@ class OrderController extends Controller
     {
         $query = Order::with(['customer', 'creator', 'items.product']);
 
-        if ($request->has('from') && $request->has('to')) {
-            $query->whereBetween('order_date', [$request->from, $request->to]);
+        if ($request->filled('from')) {
+            $query->where('order_date', '>=', \Carbon\Carbon::parse($request->from)->startOfDay());
         }
 
-        if ($request->has('customer_id')) {
+        if ($request->filled('to')) {
+            $query->where('order_date', '<=', \Carbon\Carbon::parse($request->to)->endOfDay());
+        }
+
+        if ($request->filled('customer_id')) {
             $query->where('customer_id', $request->customer_id);
+        }
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('order_number', 'like', "%{$search}%")
+                  ->orWhereHas('customer', function ($cq) use ($search) {
+                      $cq->where('customer_name', 'like', "%{$search}%");
+                  });
+            });
         }
 
         $orders = $query->latest('order_date')->paginate($request->get('per_page', 10));
@@ -64,28 +78,31 @@ class OrderController extends Controller
         ]);
 
         return DB::transaction(function () use ($request) {
-            $totalAmount = 0;
-            $itemsToCreate = [];
+            $productQuantities = [];
+            foreach ($request->items as $item) {
+                $pId = $item['product_id'];
+                $productQuantities[$pId] = ($productQuantities[$pId] ?? 0) + $item['quantity'];
+            }
+
+            // Lock products for update inside database transaction
+            $products = Product::whereIn('id', array_keys($productQuantities))
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+
             $errors = [];
-
             foreach ($request->items as $index => $item) {
-                // Lock product record for update inside transaction
-                $product = Product::lockForUpdate()->find($item['product_id']);
+                $pId = $item['product_id'];
+                $product = $products->get($pId);
 
-                if ($product->stock < $item['quantity']) {
+                if (!$product) {
+                    $errors["items.{$index}.product_id"] = ["Produk tidak ditemukan"];
+                    continue;
+                }
+
+                if ($product->stock < $productQuantities[$pId]) {
                     $errors["items.{$index}.quantity"] = [
-                        "Stok {$product->product_name} tersisa {$product->stock}, diminta {$item['quantity']}"
-                    ];
-                } else {
-                    $subtotal = $product->price * $item['quantity'];
-                    $totalAmount += $subtotal;
-
-                    $itemsToCreate[] = [
-                        'product_id' => $product->id,
-                        'quantity' => $item['quantity'],
-                        'unit_price' => $product->price,
-                        'subtotal' => $subtotal,
-                        'product_model' => $product,
+                        "Stok {$product->product_name} tersisa {$product->stock}, diminta {$productQuantities[$pId]}"
                     ];
                 }
             }
@@ -100,24 +117,47 @@ class OrderController extends Controller
             }
 
             // Format order_number INV-YYYYMMDD-XXXX
-            $dateStr = now()->format('Ymd');
-            $todayCount = Order::whereDate('created_at', now()->today())->count() + 1;
-            $orderNumber = 'INV-' . $dateStr . '-' . str_pad($todayCount, 4, '0', STR_PAD_LEFT);
+            $prefix = 'INV-' . now()->format('Ymd') . '-';
+            $latestOrder = Order::where('order_number', 'like', $prefix . '%')
+                ->orderByDesc('order_number')
+                ->first();
+
+            $nextNumber = 1;
+            if ($latestOrder) {
+                $lastSeq = (int) substr($latestOrder->order_number, -4);
+                $nextNumber = $lastSeq + 1;
+            }
+            $orderNumber = $prefix . str_pad((string)$nextNumber, 4, '0', STR_PAD_LEFT);
+
+            $totalAmount = 0;
+            $itemsData = [];
+
+            foreach ($request->items as $item) {
+                $product = $products->get($item['product_id']);
+                $subtotal = $product->price * $item['quantity'];
+                $totalAmount += $subtotal;
+
+                $itemsData[] = [
+                    'product' => $product,
+                    'quantity' => $item['quantity'],
+                    'unit_price' => $product->price,
+                    'subtotal' => $subtotal,
+                ];
+            }
 
             $order = Order::create([
                 'order_number' => $orderNumber,
                 'customer_id' => $request->customer_id,
-                'created_by' => auth()->id(),
+                'created_by' => $request->user()?->id ?? auth()->id(),
                 'order_date' => now(),
                 'total_amount' => $totalAmount,
             ]);
 
-            foreach ($itemsToCreate as $itemData) {
-                // Deduct stock
-                $itemData['product_model']->decrement('stock', $itemData['quantity']);
+            foreach ($itemsData as $itemData) {
+                $itemData['product']->decrement('stock', $itemData['quantity']);
 
                 $order->items()->create([
-                    'product_id' => $itemData['product_id'],
+                    'product_id' => $itemData['product']->id,
                     'quantity' => $itemData['quantity'],
                     'unit_price' => $itemData['unit_price'],
                     'subtotal' => $itemData['subtotal'],
