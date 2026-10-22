@@ -181,5 +181,3 @@ Sesuai dengan ketentuan pengerjaan teknis pada panduan soal:
   1. **Styling & UI Frontend (Tailwind CSS)**: Membantu percepatan penataan layout antarmuka, *utility classes* Tailwind CSS, styling tabel dinamis, modal dialog, dan desain responsif mobile.
   2. **Generasi Data Dummy (Seeder)**: Membantu penyusunan variasi nama produk ritel/FMCG, harga acuan, serta data profil pelanggan pada `DatabaseSeeder`.
   3. **Penyusunan Dokumentasi**: Membantu merapikan struktur file JSON Postman Collection dan format Markdown README.
-
-> *Seluruh arsitektur database, perancangan relasi Eloquent, logika atomisitas transaksi stok (`lockForUpdate`), integrasi API, dan skenario automated testing diverifikasi dan dikelola secara mandiri oleh kandidat.*
